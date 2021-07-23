@@ -11,6 +11,7 @@ Synopsis
     fish_config
     fish_config browse
     fish_config prompt (choose | list | save | show)
+    fish_config theme (choose | demo | dump | list | save | show)
 
 Description
 -----------
@@ -30,6 +31,19 @@ Available subcommands for the ``prompt`` command:
 - ``save`` saves the current prompt to a file (via :ref:`funcsave <cmd-funcsave>`).
 - ``show`` shows what the given sample prompts (or all) would look like.
 
+With the ``theme`` command ``fish_config`` can be used to view and choose a theme (meaning a color scheme) inside the terminal.
+
+Available subcommands for the ``theme`` command:
+
+- ``choose`` loads a sample theme in the current session.
+- ``demo`` displays some sample text in the current theme.
+- ``dump`` prints the current theme in a loadable format.
+- ``list`` lists the names of the available sample themes.
+- ``save`` saves the current prompt to :ref:`universal variables <variables-universal>`.
+- ``show`` shows what the given sample theme (or all) would look like.
+
+The themes are loaded from the theme directory shipped with fish or a ``themes`` directory in the fish configuration directory (typically ``~/.config/fish/themes``).
+
 Example
 -------
 
@@ -37,7 +51,7 @@ Example
 
 ``fish_config prompt show`` demos the available sample prompts.
 
-``fish_config prompt choose disco`` makes the disco prompt the prompt for the current session. This can also be used in :ref:`config.fish <initialization>` to set the prompt.
+``fish_config prompt choose disco`` makes the disco prompt the prompt for the current session. This can also be used in :ref:`config.fish <configuration>` to set the prompt.
 
 ``fish_config prompt save`` saves the current prompt to an :ref:`autoloaded <syntax-function-autoloading>` file.
 

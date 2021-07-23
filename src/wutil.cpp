@@ -26,18 +26,13 @@
 
 #include "common.h"
 #include "fallback.h"  // IWYU pragma: keep
+#include "fds.h"
 #include "flog.h"
 #include "wcstringutil.h"
 
 using cstring = std::string;
 
-const file_id_t kInvalidFileID = {static_cast<dev_t>(-1LL),
-                                  static_cast<ino_t>(-1LL),
-                                  static_cast<uint64_t>(-1LL),
-                                  -1,
-                                  -1,
-                                  -1,
-                                  -1};
+const file_id_t kInvalidFileID{};
 
 /// Map used as cache by wgettext.
 static owning_lock<std::unordered_map<wcstring, wcstring>> wgettext_map;
@@ -770,6 +765,10 @@ file_id_t file_id_for_fd(int fd) {
     return result;
 }
 
+file_id_t file_id_for_fd(const autoclose_fd_t &fd) {
+    return file_id_for_fd(fd.fd());
+}
+
 file_id_t file_id_for_path(const wcstring &path) {
     file_id_t result = kInvalidFileID;
     struct stat buf = {};
@@ -791,6 +790,20 @@ file_id_t file_id_for_path(const std::string &path) {
 bool file_id_t::operator==(const file_id_t &rhs) const { return this->compare_file_id(rhs) == 0; }
 
 bool file_id_t::operator!=(const file_id_t &rhs) const { return !(*this == rhs); }
+
+
+wcstring file_id_t::dump() const {
+    using llong = long long;
+    wcstring result;
+    append_format(result, L"     device: %lld\n", llong(device));
+    append_format(result, L"      inode: %lld\n", llong(inode));
+    append_format(result, L"       size: %lld\n", llong(size));
+    append_format(result, L"     change: %lld\n", llong(change_seconds));
+    append_format(result, L"change_nano: %lld\n", llong(change_nanoseconds));
+    append_format(result, L"        mod: %lld\n", llong(mod_seconds));
+    append_format(result, L"   mod_nano: %lld", llong(mod_nanoseconds));
+    return result;
+}
 
 template <typename T>
 int compare(T a, T b) {

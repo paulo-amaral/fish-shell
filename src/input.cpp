@@ -165,7 +165,7 @@ static constexpr const input_function_metadata_t input_function_metadata[] = {
     {L"yank-pop", readline_cmd_t::yank_pop},
 };
 
-ASSERT_SORT_ORDER(input_function_metadata, .name);
+ASSERT_SORTED_BY_NAME(input_function_metadata);
 static_assert(sizeof(input_function_metadata) / sizeof(input_function_metadata[0]) ==
                   input_function_count,
               "input_function_metadata size mismatch with input_common. Did you forget to update "
@@ -329,6 +329,10 @@ void inputter_t::prepare_to_select() /* override */ {
 }
 
 void inputter_t::select_interrupted() /* override */ {
+    // Readline commands may be bound to \cc which also sets the cancel flag.
+    // See #6937, #8125.
+    signal_clear_cancel();
+
     // Fire any pending events and reap stray processes, including printing exit status messages.
     auto &parser = *this->parser_;
     event_fire_delayed(parser);
@@ -853,7 +857,6 @@ static std::vector<terminfo_mapping_t> create_input_terminfo() {
 }
 
 bool input_terminfo_get_sequence(const wcstring &name, wcstring *out_seq) {
-    ASSERT_IS_MAIN_THREAD();
     assert(s_input_initialized);
     for (const terminfo_mapping_t &m : *s_terminfo_mappings) {
         if (name == m.name) {

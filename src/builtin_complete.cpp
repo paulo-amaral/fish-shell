@@ -124,8 +124,6 @@ static void builtin_complete_print(const wcstring &cmd, io_streams_t &streams, p
 /// The complete builtin. Used for specifying programmable tab-completions. Calls the functions in
 // complete.cpp for any heavy lifting.
 maybe_t<int> builtin_complete(parser_t &parser, io_streams_t &streams, const wchar_t **argv) {
-    ASSERT_IS_MAIN_THREAD();
-
     const wchar_t *cmd = argv[0];
     int argc = builtin_count_args(argv);
     completion_mode_t result_mode{};
@@ -344,14 +342,14 @@ maybe_t<int> builtin_complete(parser_t &parser, io_streams_t &streams, const wch
     if (do_complete) {
         if (!have_do_complete_param) {
             // No argument given, try to use the current commandline.
-            const wchar_t *cmd = reader_get_buffer();
-            if (cmd == nullptr) {
+            auto state = commandline_get_state();
+            if (!state.initialized) {
                 // This corresponds to using 'complete -C' in non-interactive mode.
                 // See #2361    .
                 builtin_missing_argument(parser, streams, cmd, argv[w.woptind - 1]);
                 return STATUS_INVALID_ARGS;
             }
-            do_complete_param = cmd;
+            do_complete_param = std::move(state.text);
         }
         const wchar_t *token;
 

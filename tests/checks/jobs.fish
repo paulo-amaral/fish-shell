@@ -1,7 +1,14 @@
 #RUN: %fish %s
 
 # Ensure there's no zombies before we start, otherwise the tests will mysteriously fail.
-set zombies_among_us (ps -o stat | string match 'Z*' | count)
+set -l zombies_among_us
+if not contains (uname) SunOS
+    set zombies_among_us (ps -o stat | string match 'Z*' | count)
+else
+    # Solaris' ps is awkward, I don't know if this actually works
+    set zombies_among_us (ps -o s | string match 'Z*' | count)
+end
+
 [ "$zombies_among_us" -eq "0" ]
 or begin
 	echo "Found existing zombie processes. Clean up zombies before running this test."
@@ -23,7 +30,16 @@ sleep 0.1
 # be gone by the time we get here. Unfortunately, kill from procps on pre-2016 distributions
 # does not print an error for non-existent PIDs, so instead look for zombies in this session
 # (there should be none).
-ps -o stat | string match 'Z*'
+if not contains (uname) SunOS
+    ps -o stat | string match 'Z*'
+else
+    ps -o s | string match 'Z*'
+end
+
+# Verify disown can be used with last_pid, even if it is separate from the pgroup.
+# This should silently succeed.
+command true | sleep 0.5 &
+disown $last_pid
 
 jobs -q
 echo $status
@@ -116,11 +132,6 @@ end
 emit bar
 #CHECK: foo
 #CHECK: caller
-# Since we are in a script context, this would not trigger "job control"
-# if it was set to "interactive"
-status is-full-job-control
-and echo is full job control
-#CHECK: is full job control
 
 # We can't rely on a *specific* pgid being assigned,
 # but we can rely on it not being fish's.

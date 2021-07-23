@@ -64,7 +64,7 @@ variables.
 This means that the global value takes precedence over the universal value.
 
 To avoid this problem, consider changing the setting which fish inherits. If this is not possible,
-add a statement to your :ref:`user initialization file <initialization>` (usually
+add a statement to your :ref:`configuration file <configuration>` (usually
 ``~/.config/fish/config.fish``)::
 
     set -gx EDITOR vim
@@ -145,7 +145,7 @@ Note that fish has a default titlebar message, which will be used if the fish_ti
 
 How do I run a command from history?
 ------------------------------------
-Type some part of the command, and then hit the :kbd:`↑` (up) or :kbd:`↓` (down) arrow keys to navigate through history matches. Additional default key bindings include :kbd:`Control`\ +\ :kbd:`P` (up) and :kbd:`Control`\ +\ :kbd:`N` (down).
+Type some part of the command, and then hit the :kbd:`↑` (up) or :kbd:`↓` (down) arrow keys to navigate through history matches. Additional default key bindings include :kbd:`Control`\ +\ :kbd:`P` (up) and :kbd:`Control`\ +\ :kbd:`N` (down). See :ref:`Searchable command history <history-search>` for more information.
 
 Why doesn't history substitution ("!$" etc.) work?
 --------------------------------------------------
@@ -306,7 +306,7 @@ This problem may show up as messages like "``Received message too long``", "``op
 failed: not a terminal``", "``Bad packet length``", or "``Connection refused``" with strange output
 in ``ssh_exchange_identification`` messages in the debug log.
 
-This usually happens because fish reads the :ref:`user configuration file <initialization>` (``~/.config/fish/config.fish``) *always*,
+This usually happens because fish reads the :ref:`user configuration file <configuration>` (``~/.config/fish/config.fish``) *always*,
 whether it's in an interactive or login or non-interactive or non-login shell.
 
 This simplifies matters, but it also means when config.fish generates output, it will do that even in non-interactive shells like the one ssh/scp/rsync start when they connect.
@@ -322,8 +322,8 @@ The same applies for example when you start ``tmux`` in config.fish without guar
 
 .. _faq-unicode:
 
-I'm getting weird graphical glitches (a staircase effect, ghost characters,...)?
---------------------------------------------------------------------------------
+I'm getting weird graphical glitches (a staircase effect, ghost characters, cursor in the wrong position,...)?
+--------------------------------------------------------------------------------------------------------------
 In a terminal, the application running inside it and the terminal itself need to agree on the width of characters in order to handle cursor movement.
 
 This is more important to fish than other shells because features like syntax highlighting and autosuggestions are implemented by moving the cursor.

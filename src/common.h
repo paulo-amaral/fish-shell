@@ -156,30 +156,12 @@ enum {
 };
 typedef unsigned int escape_flags_t;
 
-/// Issue a debug message with printf-style string formating and automatic line breaking. The string
-/// will begin with the string \c program_name, followed by a colon and a whitespace.
-///
-/// Because debug is often called to tell the user about an error, before using wperror to give a
-/// specific error message, debug will never ever modify the value of errno.
-///
-/// \param level the priority of the message. Lower number means higher priority. Messages with a
-/// priority_number higher than \c debug_level will be ignored..
-/// \param msg the message format string.
-///
-/// Example:
-///
-/// <code>debug( 1, L"Pi = %.3f", M_PI );</code>
-///
-/// will print the string 'fish: Pi = 3.141', given that debug_level is 1 or higher, and that
-/// program_name is 'fish'.
-[[gnu::noinline, gnu::format(printf, 2, 3)]] void debug_impl(int level, const char *msg, ...);
-[[gnu::noinline]] void debug_impl(int level, const wchar_t *msg, ...);
+/// A user-visible job ID.
+using job_id_t = int;
 
-/// The verbosity level of fish. If a call to debug has a severity level higher than \c debug_level,
-/// it will not be printed.
-extern std::atomic<int> debug_level;
-
-inline bool should_debug(int level) { return level <= debug_level.load(std::memory_order_relaxed); }
+/// The non user-visible, never-recycled job ID.
+/// Every job has a unique positive value for this.
+using internal_job_id_t = uint64_t;
 
 /// Exits without invoking destructors (via _exit), useful for code after fork.
 [[noreturn]] void exit_without_destructors(int code);
@@ -333,16 +315,6 @@ wcstring format_size(long long sz);
 /// Version of format_size that does not allocate memory.
 void format_size_safe(char buff[128], unsigned long long sz);
 
-/// Our crappier versions of debug which is guaranteed to not allocate any memory, or do anything
-/// other than call write(). This is useful after a call to fork() with threads.
-void debug_safe(int level, const char *msg, const char *param1 = nullptr,
-                const char *param2 = nullptr, const char *param3 = nullptr,
-                const char *param4 = nullptr, const char *param5 = nullptr,
-                const char *param6 = nullptr, const char *param7 = nullptr,
-                const char *param8 = nullptr, const char *param9 = nullptr,
-                const char *param10 = nullptr, const char *param11 = nullptr,
-                const char *param12 = nullptr);
-
 /// Writes out a long safely.
 void format_long_safe(char buff[64], long val);
 void format_long_safe(wchar_t buff[64], long val);
@@ -469,11 +441,11 @@ std::unique_ptr<T> make_unique(Args &&...args) {
 }
 #endif
 
-/// This functions returns the end of the quoted substring beginning at \c in. The type of quoting
-/// character is detemrined by examining \c in. Returns 0 on error.
+/// This functions returns the end of the quoted substring beginning at \c pos. Returns 0 on error.
 ///
-/// \param in the position of the opening quote.
-wchar_t *quote_end(const wchar_t *pos);
+/// \param pos the position of the opening quote.
+/// \param quote the quote to use, usually pointed to by \c pos.
+const wchar_t *quote_end(const wchar_t *pos, wchar_t quote);
 
 /// This function should be called after calling `setlocale()` to perform fish specific locale
 /// initialization.
@@ -500,6 +472,10 @@ wcstring escape_string(const wchar_t *in, escape_flags_t flags,
                        escape_string_style_t style = STRING_STYLE_SCRIPT);
 wcstring escape_string(const wcstring &in, escape_flags_t flags,
                        escape_string_style_t style = STRING_STYLE_SCRIPT);
+
+/// Escape a string so that it may be inserted into a double-quoted string.
+/// This permits ownership transfer.
+wcstring escape_string_for_double_quotes(wcstring in);
 
 /// \return a string representation suitable for debugging (not for presenting to the user). This
 /// replaces non-ASCII characters with either tokens like <BRACE_SEP> or <\xfdd7>. No other escapes
@@ -722,47 +698,25 @@ constexpr ssize_t const_strcmp(const T *lhs, const T *rhs) {
     return (*lhs == *rhs) ? (*lhs == 0 ? 0 : const_strcmp(lhs + 1, rhs + 1))
                           : (*lhs > *rhs ? 1 : -1);
 }
-static_assert(const_strcmp("", "a") < 0, "const_strcmp failure");
-static_assert(const_strcmp("a", "a") == 0, "const_strcmp failure");
-static_assert(const_strcmp("a", "") > 0, "const_strcmp failure");
-static_assert(const_strcmp("aa", "a") > 0, "const_strcmp failure");
-static_assert(const_strcmp("a", "aa") < 0, "const_strcmp failure");
-static_assert(const_strcmp("b", "aa") > 0, "const_strcmp failure");
 
 /// Compile-time agnostic-size strlen/wcslen implementation. Unicode-unaware.
 template <typename T, size_t N>
-constexpr size_t const_strlen(const T (&val)[N], ssize_t index = -1) {
-    // N is the length of the character array, but that includes one **or more** trailing nuls.
-    static_assert(N > 0, "Invalid input to const_strlen");
-    return index == -1
-               ?
-               // Assume a minimum of one trailing nul and do a quick check for the usual case
-               // (single trailing nul) before recursing:
-               N - 1 - (N <= 2 || val[N - 2] != static_cast<T>(0) ? 0 : const_strlen(val, N - 2))
-               // Prevent an underflow in case the string is comprised of all \0 bytes
-               : index == 0
-                     ? 0
-                     // Keep back-tracking until a non-nul byte is found
-                     : (val[index] != static_cast<T>(0) ? 0 : 1 + const_strlen(val, index - 1));
+constexpr size_t const_strlen(const T (&val)[N], size_t last_checked_idx = N,
+                              size_t first_nul_idx = N) {
+    // Assume there's a nul char at the end (index N) but there may be one before that that.
+    return last_checked_idx == 0
+               ? first_nul_idx
+               : const_strlen(val, last_checked_idx - 1,
+                              val[last_checked_idx - 1] ? first_nul_idx : last_checked_idx - 1);
 }
-static_assert(const_strlen("") == 0, "const_strlen failure");
-static_assert(const_strlen("a") == 1, "const_strlen failure");
-static_assert(const_strlen("hello") == 5, "const_strlen failure");
 
-/// Compile-time assertion of alphabetical sort of array `array`, by specified
-/// parameter `accessor`. This is only a macro because constexpr lambdas (to
-/// specify the accessor for the sort key) are C++17 and up.
-#define ASSERT_SORT_ORDER(array, accessor)                                                \
-    struct verify_##array##_sort_t {                                                      \
-        template <class T, size_t N>                                                      \
-        constexpr static bool validate(T (&vals)[N], size_t idx = 0) {                    \
-            return (idx == (((sizeof(array) / sizeof(vals[0]))) - 1))                     \
-                       ? true                                                             \
-                       : const_strcmp(vals[idx] accessor, vals[idx + 1] accessor) <= 0 && \
-                             verify_##array##_sort_t::validate<T, N>(vals, idx + 1);      \
-        }                                                                                 \
-    };                                                                                    \
-    static_assert(verify_##array##_sort_t::validate(array),                               \
-                  #array " members not in asciibetical order!");
+/// \return true if the array \p vals is sorted by its name property.
+template <typename T, size_t N>
+constexpr bool is_sorted_by_name(const T (&vals)[N], size_t idx = 1) {
+    return idx >= N ? true
+                    : (const_strcmp(vals[idx - 1].name, vals[idx].name) <= 0 &&
+                       is_sorted_by_name(vals, idx + 1));
+}
+#define ASSERT_SORTED_BY_NAME(x) static_assert(is_sorted_by_name(x), #x " not sorted by name")
 
 #endif  // FISH_COMMON_H

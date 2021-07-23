@@ -75,7 +75,7 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
 
     # Default (command) mode
     bind -s --preset :q exit
-    bind -s --preset -m insert \cc cancel-commandline
+    bind -s --preset -m insert \cc cancel-commandline repaint-mode
     bind -s --preset -M default h backward-char
     bind -s --preset -M default l forward-char
     bind -s --preset -m insert \n execute
@@ -302,11 +302,12 @@ function fish_vi_key_bindings --description 'vi-like key bindings for fish'
     end
 
     bind -s --preset -M visual -m insert c kill-selection end-selection repaint-mode
+    bind -s --preset -M visual -m insert s kill-selection end-selection repaint-mode
     bind -s --preset -M visual -m default d kill-selection end-selection repaint-mode
     bind -s --preset -M visual -m default x kill-selection end-selection repaint-mode
     bind -s --preset -M visual -m default X kill-whole-line end-selection repaint-mode
     bind -s --preset -M visual -m default y kill-selection yank end-selection repaint-mode
-    bind -s --preset -M visual -m default '"*y' "commandline -s | xsel -p; commandline -f end-selection repaint-mode"
+    bind -s --preset -M visual -m default '"*y' "fish_clipboard_copy; commandline -f end-selection repaint-mode"
     bind -s --preset -M visual -m default '~' togglecase-selection end-selection repaint-mode
 
     bind -s --preset -M visual -m default \cc end-selection repaint-mode

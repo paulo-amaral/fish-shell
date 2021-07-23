@@ -181,7 +181,6 @@ bool is_thompson_shell_script(const char *path) {
 /// This function is similar to launch_process, except it is not called after a fork (i.e. it only
 /// calls exec) and therefore it can allocate memory.
 [[noreturn]] static void launch_process_nofork(env_stack_t &vars, process_t *p) {
-    ASSERT_IS_MAIN_THREAD();
     ASSERT_IS_NOT_FORKED_CHILD();
 
     // Construct argv. Ensure the strings stay alive for the duration of this function.
@@ -207,6 +206,9 @@ bool is_thompson_shell_script(const char *path) {
 // we use fork(), we can call tcsetpgrp after the fork, before the exec, and avoid the race).
 static bool can_use_posix_spawn_for_job(const std::shared_ptr<job_t> &job,
                                         const dup2_list_t &dup2s) {
+    // Is it globally disabled?
+    if (!get_use_posix_spawn()) return false;
+
     // Hack - do not use posix_spawn if there are self-fd redirections.
     // For example if you were to write:
     //   cmd 6< /dev/null
@@ -545,8 +547,7 @@ static launch_result_t exec_external_command(parser_t &parser, const std::shared
 
 #if FISH_USE_POSIX_SPAWN
     // Prefer to use posix_spawn, since it's faster on some systems like OS X.
-    bool use_posix_spawn = g_use_posix_spawn && can_use_posix_spawn_for_job(j, dup2s);
-    if (use_posix_spawn) {
+    if (can_use_posix_spawn_for_job(j, dup2s)) {
         s_fork_count++;  // spawn counts as a fork+exec
 
         posix_spawner_t spawner(j.get(), dup2s);
@@ -930,6 +931,9 @@ static launch_result_t exec_process_in_job(parser_t &parser, process_t *p,
                 launch_result_t::failed) {
                 return launch_result_t::failed;
             }
+            // It's possible (though unlikely) that this is a background process which recycled a
+            // pid from another, previous background process. Forget any such old process.
+            parser.get_wait_handles().remove_by_pid(p->pid);
             break;
         }
 
@@ -1120,9 +1124,12 @@ bool exec_job(parser_t &parser, const shared_ptr<job_t> &j, const io_chain_t &bl
 
     // If exec_error then a backgrounded job would have been terminated before it was ever assigned
     // a pgroup, so error out before setting last_pid.
-    auto pgid = j->get_pgid();
-    if (!j->is_foreground() && pgid.has_value()) {
-        parser.vars().set_one(L"last_pid", ENV_GLOBAL, to_string(*pgid));
+    if (!j->is_foreground()) {
+        if (maybe_t<pid_t> last_pid = j->get_last_pid()) {
+            parser.vars().set_one(L"last_pid", ENV_GLOBAL, to_string(*last_pid));
+        } else {
+            parser.vars().set_empty(L"last_pid", ENV_GLOBAL);
+        }
     }
 
     j->continue_job(parser, !j->is_initially_background());

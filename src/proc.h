@@ -8,7 +8,7 @@
 #include <signal.h>
 #include <stddef.h>
 #include <sys/time.h>  // IWYU pragma: keep
-#include <sys/wait.h>
+#include <sys/wait.h>  // IWYU pragma: keep
 #include <unistd.h>
 
 #include <deque>
@@ -21,6 +21,7 @@
 #include "io.h"
 #include "parse_tree.h"
 #include "topic_monitor.h"
+#include "wait_handle.h"
 
 /// Types of processes.
 enum class process_type_t {
@@ -248,6 +249,10 @@ class process_t {
     /// \return whether this process type is internal (block, function, or builtin).
     bool is_internal() const;
 
+    /// \return the wait handle for the process, creating it if \p create is set.
+    /// This will return nullptr if the process does not have a pid (i.e. is not external).
+    wait_handle_ref_t get_wait_handle(bool create = true);
+
     /// Actual command to pass to exec in case of process_type_t::external or process_type_t::exec.
     wcstring actual_cmd;
 
@@ -285,17 +290,13 @@ class process_t {
    private:
     wcstring_list_t argv_;
     redirection_spec_list_t proc_redirection_specs_;
+
+    // The wait handle. This is constructed lazily, and cached.
+    wait_handle_ref_t wait_handle_{};
 };
 
-typedef std::unique_ptr<process_t> process_ptr_t;
-typedef std::vector<process_ptr_t> process_list_t;
-
-/// A user-visible job ID.
-using job_id_t = int;
-
-/// The non user-visible, never-recycled job ID.
-/// Every job has a unique positive value for this.
-using internal_job_id_t = uint64_t;
+using process_ptr_t = std::unique_ptr<process_t>;
+using process_list_t = std::vector<process_ptr_t>;
 
 /// A struct representing a job. A job is a pipeline of one or more processes.
 class job_t {
@@ -383,6 +384,11 @@ class job_t {
     /// This may be none if the job consists of just internal fish functions or builtins.
     /// This may also be fish itself.
     maybe_t<pid_t> get_pgid() const;
+
+    /// \return the pid of the last external process in the job.
+    /// This may be none if the job consists of just internal fish functions or builtins.
+    /// This will never be fish's own pid.
+    maybe_t<pid_t> get_last_pid() const;
 
     /// The id of this job.
     /// This is user-visible, is recycled, and may be -1.
@@ -522,9 +528,6 @@ void proc_update_jiffies(parser_t &parser);
 /// Perform a set of simple sanity checks on the job list. This includes making sure that only one
 /// job is in the foreground, that every process is in a valid state, etc.
 void proc_sanity_check(const parser_t &parser);
-
-/// Create a process/job exit event notification.
-event_t proc_create_event(const wchar_t *msg, event_type_t type, pid_t pid, int status);
 
 /// Initializations.
 void proc_init();

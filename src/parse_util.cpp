@@ -104,36 +104,39 @@ size_t parse_util_get_offset(const wcstring &str, int line, long line_offset) {
     return off + line_offset;
 }
 
-static int parse_util_locate_brackets_of_type(const wchar_t *in, wchar_t **begin, wchar_t **end,
-                                              bool allow_incomplete, wchar_t open_type,
-                                              wchar_t close_type) {
-    // open_type is typically ( or [, and close type is the corresponding value.
-    wchar_t *pos;
+static int parse_util_locate_cmdsub(const wchar_t *in, const wchar_t **begin, const wchar_t **end,
+                                    bool allow_incomplete, bool *is_quoted) {
     bool escaped = false;
     bool syntax_error = false;
     int paran_count = 0;
+    std::vector<int> quoted_cmdsubs;
 
-    wchar_t *paran_begin = nullptr, *paran_end = nullptr;
+    const wchar_t *paran_begin = nullptr, *paran_end = nullptr;
 
     assert(in && "null parameter");
-
-    for (pos = const_cast<wchar_t *>(in); *pos; pos++) {
+    for (const wchar_t *pos = in; *pos; pos++) {
         if (!escaped) {
-            if (std::wcschr(L"\'\"", *pos)) {
-                wchar_t *q_end = quote_end(pos);
+            if (*pos == L'\'' || *pos == L'"') {
+                const wchar_t *q_end = quote_end(pos, *pos);
                 if (q_end && *q_end) {
+                    if (*q_end == L'$') {
+                        quoted_cmdsubs.push_back(paran_count);
+                        // We want to report if the outermost comand substitution between
+                        // paran_begin..paran_end is quoted.
+                        if (paran_count == 0 && is_quoted) *is_quoted = true;
+                    }
                     pos = q_end;
                 } else {
                     break;
                 }
             } else {
-                if (*pos == open_type) {
+                if (*pos == L'(') {
                     if ((paran_count == 0) && (paran_begin == nullptr)) {
                         paran_begin = pos;
                     }
 
                     paran_count++;
-                } else if (*pos == close_type) {
+                } else if (*pos == L')') {
                     paran_count--;
 
                     if ((paran_count == 0) && (paran_end == nullptr)) {
@@ -144,6 +147,24 @@ static int parse_util_locate_brackets_of_type(const wchar_t *in, wchar_t **begin
                     if (paran_count < 0) {
                         syntax_error = true;
                         break;
+                    }
+
+                    // Check if the ) did complete a quoted command substituion.
+                    if (!quoted_cmdsubs.empty() && quoted_cmdsubs.back() == paran_count) {
+                        quoted_cmdsubs.pop_back();
+                        // Quoted command substitutions temporarily close double quotes.
+                        // In "foo$(bar)baz$(qux)"
+                        // We are here ^
+                        // After the ) in a quoted command substitution, we need to act as if
+                        // there was an invisible double quote.
+                        const wchar_t *q_end = quote_end(pos, L'"');
+                        if (q_end && *q_end) {  // Found a valid closing quote.
+                            // Stop at $(qux), which is another quoted command substitution.
+                            if (*q_end == L'$') quoted_cmdsubs.push_back(paran_count);
+                            pos = q_end;
+                        } else {
+                            break;
+                        }
                     }
                 }
             }
@@ -171,21 +192,58 @@ static int parse_util_locate_brackets_of_type(const wchar_t *in, wchar_t **begin
     }
 
     if (end) {
-        *end = paran_count ? const_cast<wchar_t *>(in) + std::wcslen(in) : paran_end;
+        *end = paran_count ? in + std::wcslen(in) : paran_end;
     }
 
     return 1;
 }
 
-int parse_util_locate_slice(const wchar_t *in, wchar_t **begin, wchar_t **end,
-                            bool accept_incomplete) {
-    return parse_util_locate_brackets_of_type(in, begin, end, accept_incomplete, L'[', L']');
+long parse_util_slice_length(const wchar_t *in) {
+    assert(in && "null parameter");
+    const wchar_t openc = L'[';
+    const wchar_t closec = L']';
+    bool escaped = false;
+
+    // Check for initial opening [
+    if (*in != openc) return 0;
+    int bracket_count = 1;
+
+    assert(in && "null parameter");
+    for (const wchar_t *pos = in + 1; *pos; pos++) {
+        if (!escaped) {
+            if (*pos == L'\'' || *pos == L'"') {
+                const wchar_t *q_end = quote_end(pos, *pos);
+                if (q_end && *q_end) {
+                    pos = q_end;
+                } else {
+                    break;
+                }
+            } else {
+                if (*pos == openc) {
+                    bracket_count++;
+                } else if (*pos == closec) {
+                    bracket_count--;
+                    if (bracket_count == 0) {
+                        // pos points at the closing ], so add 1.
+                        return pos - in + 1;
+                    }
+                }
+            }
+        }
+        if (*pos == '\\') {
+            escaped = !escaped;
+        } else {
+            escaped = false;
+        }
+    }
+    assert(bracket_count > 0 && "Should have unclosed brackets");
+    return -1;
 }
 
-static int parse_util_locate_brackets_range(const wcstring &str, size_t *inout_cursor_offset,
-                                            wcstring *out_contents, size_t *out_start,
-                                            size_t *out_end, bool accept_incomplete,
-                                            wchar_t open_type, wchar_t close_type) {
+
+int parse_util_locate_cmdsubst_range(const wcstring &str, size_t *inout_cursor_offset,
+                                     wcstring *out_contents, size_t *out_start, size_t *out_end,
+                                     bool accept_incomplete, bool *out_is_quoted) {
     // Clear the return values.
     if (out_contents != nullptr) out_contents->clear();
     *out_start = 0;
@@ -198,10 +256,11 @@ static int parse_util_locate_brackets_range(const wcstring &str, size_t *inout_c
     const wchar_t *const buff = str.c_str();
     const wchar_t *const valid_range_start = buff + *inout_cursor_offset,
                          *valid_range_end = buff + str.size();
-    wchar_t *bracket_range_begin = nullptr, *bracket_range_end = nullptr;
-    int ret = parse_util_locate_brackets_of_type(valid_range_start, &bracket_range_begin,
-                                                 &bracket_range_end, accept_incomplete, open_type,
-                                                 close_type);
+    const wchar_t *bracket_range_begin = nullptr;
+    const wchar_t *bracket_range_end = nullptr;
+
+    int ret = parse_util_locate_cmdsub(valid_range_start, &bracket_range_begin, &bracket_range_end,
+                                       accept_incomplete, out_is_quoted);
     if (ret <= 0) {
         return ret;
     }
@@ -229,13 +288,6 @@ static int parse_util_locate_brackets_range(const wcstring &str, size_t *inout_c
     return ret;
 }
 
-int parse_util_locate_cmdsubst_range(const wcstring &str, size_t *inout_cursor_offset,
-                                     wcstring *out_contents, size_t *out_start, size_t *out_end,
-                                     bool accept_incomplete) {
-    return parse_util_locate_brackets_range(str, inout_cursor_offset, out_contents, out_start,
-                                            out_end, accept_incomplete, L'(', L')');
-}
-
 void parse_util_cmdsubst_extent(const wchar_t *buff, size_t cursor_pos, const wchar_t **a,
                                 const wchar_t **b) {
     assert(buff && "Null buffer");
@@ -248,8 +300,8 @@ void parse_util_cmdsubst_extent(const wchar_t *buff, size_t cursor_pos, const wc
     const wchar_t *ap = buff, *bp = buff + bufflen;
     const wchar_t *pos = buff;
     for (;;) {
-        wchar_t *begin = nullptr, *end = nullptr;
-        if (parse_util_locate_brackets_of_type(pos, &begin, &end, true, L'(', L')') <= 0) {
+        const wchar_t *begin = nullptr, *end = nullptr;
+        if (parse_util_locate_cmdsub(pos, &begin, &end, true, nullptr) <= 0) {
             // No subshell found, all done.
             break;
         }
@@ -454,7 +506,7 @@ wcstring parse_util_unescape_wildcards(const wcstring &str) {
 static wchar_t get_quote(const wcstring &cmd_str, size_t len) {
     size_t i = 0;
     wchar_t res = 0;
-    const wchar_t *const cmd = cmd_str.c_str();
+    const wchar_t *cmd = cmd_str.c_str();
 
     while (true) {
         if (!cmd[i]) break;
@@ -465,8 +517,7 @@ static wchar_t get_quote(const wcstring &cmd_str, size_t len) {
             i++;
         } else {
             if (cmd[i] == L'\'' || cmd[i] == L'\"') {
-                const wchar_t *end = quote_end(&cmd[i]);
-                // std::fwprintf( stderr, L"Jump %d\n",  end-cmd );
+                const wchar_t *end = quote_end(&cmd[i], cmd[i]);
                 if ((end == nullptr) || (!*end) || (end > cmd + len)) {
                     res = cmd[i];
                     break;
@@ -480,47 +531,15 @@ static wchar_t get_quote(const wcstring &cmd_str, size_t len) {
     return res;
 }
 
-void parse_util_get_parameter_info(const wcstring &cmd, const size_t pos, wchar_t *quote,
-                                   size_t *offset, token_type_t *out_type) {
-    size_t prev_pos = 0;
-    wchar_t last_quote = L'\0';
-
+wchar_t parse_util_get_quote_type(const wcstring &cmd, size_t pos) {
     tokenizer_t tok(cmd.c_str(), TOK_ACCEPT_UNFINISHED);
     while (auto token = tok.next()) {
-        if (token->offset > pos) break;
-
-        if (token->type == token_type_t::string)
-            last_quote = get_quote(tok.text_of(*token), pos - token->offset);
-
-        if (out_type != nullptr) *out_type = token->type;
-
-        prev_pos = token->offset;
-    }
-
-    wchar_t *cmd_tmp = wcsdup(cmd.c_str());
-    cmd_tmp[pos] = 0;
-    size_t cmdlen = pos;
-    bool finished = cmdlen != 0;
-    if (finished) {
-        finished = (quote == nullptr);
-        if (finished && std::wcschr(L" \t\n\r", cmd_tmp[cmdlen - 1])) {
-            finished = cmdlen > 1 && cmd_tmp[cmdlen - 2] == L'\\';
+        if (token->type == token_type_t::string &&
+            token->location_in_or_at_end_of_source_range(pos)) {
+            return get_quote(tok.text_of(*token), pos - token->offset);
         }
     }
-
-    if (quote) *quote = last_quote;
-
-    if (offset != nullptr) {
-        if (finished) {
-            while ((cmd_tmp[prev_pos] != 0) && (std::wcschr(L";|", cmd_tmp[prev_pos]) != nullptr))
-                prev_pos++;
-            *offset = prev_pos;
-        } else {
-            *offset = pos;
-        }
-    }
-
-    free(cmd_tmp);
+    return L'\0';
 }
 
 wcstring parse_util_escape_string_with_quote(const wcstring &cmd, wchar_t quote, bool no_tilde) {
@@ -888,26 +907,6 @@ void parse_util_expand_variable_error(const wcstring &token, size_t global_token
             append_syntax_error(errors, global_dollar_pos, ERROR_NO_VAR_NAME);
             break;
         }
-        case '(': {
-            // e.g.: 'echo "foo$(bar)baz"
-            // Try to determine what's in the parens.
-            wcstring token_after_parens;
-            wcstring paren_text;
-            size_t open_parens = dollar_pos + 1, cmdsub_start = 0, cmdsub_end = 0;
-            if (parse_util_locate_cmdsubst_range(token, &open_parens, &paren_text, &cmdsub_start,
-                                                 &cmdsub_end, true) > 0) {
-                token_after_parens = tok_first(paren_text);
-            }
-
-            // Make sure we always show something.
-            if (token_after_parens.empty()) {
-                token_after_parens = get_ellipsis_str();
-            }
-
-            append_syntax_error(errors, global_dollar_pos, ERROR_BAD_VAR_SUBCOMMAND1,
-                                truncate(token_after_parens, var_err_len).c_str());
-            break;
-        }
         case L'\0': {
             append_syntax_error(errors, global_dollar_pos, ERROR_NO_VAR_NAME);
             break;
@@ -931,39 +930,6 @@ void parse_util_expand_variable_error(const wcstring &token, size_t global_token
 
     // We should have appended exactly one error.
     assert(errors->size() == start_error_count + 1);
-}
-
-/// Detect cases like $(abc). Given an arg like foo(bar), let arg_src be foo and cmdsubst_src be
-/// bar. If arg ends with VARIABLE_EXPAND, then report an error.
-static parser_test_error_bits_t detect_dollar_cmdsub_errors(size_t arg_src_offset,
-                                                            const wcstring &arg_src,
-                                                            const wcstring &cmdsubst_src,
-                                                            parse_error_list_t *out_errors) {
-    parser_test_error_bits_t result_bits = 0;
-    wcstring unescaped_arg_src;
-
-    if (!unescape_string(arg_src, &unescaped_arg_src, UNESCAPE_SPECIAL) ||
-        unescaped_arg_src.empty()) {
-        return result_bits;
-    }
-
-    wchar_t last = unescaped_arg_src.at(unescaped_arg_src.size() - 1);
-    if (last == VARIABLE_EXPAND) {
-        result_bits |= PARSER_TEST_ERROR;
-        if (out_errors != nullptr) {
-            wcstring subcommand_first_token = tok_first(cmdsubst_src);
-            if (subcommand_first_token.empty()) {
-                // e.g. $(). Report somthing.
-                subcommand_first_token = get_ellipsis_str();
-            }
-            append_syntax_error(
-                out_errors,
-                arg_src_offset + arg_src.size() - 1,  // global position of the dollar
-                ERROR_BAD_VAR_SUBCOMMAND1, truncate(subcommand_first_token, var_err_len).c_str());
-        }
-    }
-
-    return result_bits;
 }
 
 /// Test if this argument contains any errors. Detected errors include syntax errors in command
@@ -1011,15 +977,6 @@ parser_test_error_bits_t parse_util_detect_errors_in_argument(const ast::argumen
 
                 if (out_errors != nullptr) {
                     out_errors->insert(out_errors->end(), subst_errors.begin(), subst_errors.end());
-
-                    // Hackish. Take this opportunity to report $(...) errors. We do this because
-                    // after we've replaced with internal separators, we can't distinguish between
-                    // "" and (), and also we no longer have the source of the command substitution.
-                    // As an optimization, this is only necessary if the last character is a $.
-                    if (paren_begin > 0 && arg_src.at(paren_begin - 1) == L'$') {
-                        err |= detect_dollar_cmdsub_errors(
-                            source_start, arg_src.substr(0, paren_begin), subst, out_errors);
-                    }
                 }
                 break;
             }
@@ -1046,7 +1003,7 @@ parser_test_error_bits_t parse_util_detect_errors_in_argument(const ast::argumen
 
         wchar_t next_char = idx + 1 < unesc_size ? unesc.at(idx + 1) : L'\0';
         if (next_char != VARIABLE_EXPAND && next_char != VARIABLE_EXPAND_SINGLE &&
-            !valid_var_name_char(next_char)) {
+            next_char != '(' && !valid_var_name_char(next_char)) {
             err = 1;
             if (out_errors) {
                 // We have something like $$$^....  Back up until we reach the first $.
@@ -1182,25 +1139,6 @@ static bool detect_errors_in_decorated_statement(const wcstring &buff_src,
         if (!errored && parser_is_pipe_forbidden(command) && is_in_pipeline) {
             errored =
                 append_syntax_error(parse_errors, source_start, EXEC_ERR_MSG, command.c_str());
-        }
-
-        // Check that we don't return from outside a function. But we allow it if it's
-        // 'return --help'.
-        if (!errored && command == L"return" && !first_arg_is_help) {
-            // See if we are in a function.
-            bool found_function = false;
-            for (const node_t *cursor = &dst; cursor != nullptr; cursor = cursor->parent) {
-                if (const auto *bs = cursor->try_as<block_statement_t>()) {
-                    if (bs->header->type == type_t::function_header) {
-                        found_function = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!found_function) {
-                errored = append_syntax_error(parse_errors, source_start, INVALID_RETURN_ERR_MSG);
-            }
         }
 
         // Check that we don't break or continue from outside a loop.

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.2)
+cmake_minimum_required(VERSION 3.5)
 
 if(POLICY CMP0066)
   cmake_policy(SET CMP0066 OLD)
@@ -56,22 +56,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra \
 # Disable exception handling.
 add_compile_options(-fno-exceptions)
 
-# Prefer lld or the gold linker because they don't emit useless warnings about sys_nerr and
-# _sys_errlist. They're also faster (significantly so in the case of lld).
-if (UNIX)
-    execute_process(COMMAND ${CMAKE_C_COMPILER} -fuse-ld=lld -Wl,--version
-        ERROR_QUIET OUTPUT_VARIABLE LD_VERSION)
-    if ("${LD_VERSION}" MATCHES "LLD ")
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=lld")
-    elseif (NOT APPLE)
-        execute_process(COMMAND ${CMAKE_C_COMPILER} -fuse-ld=gold -Wl,--version
-            ERROR_QUIET OUTPUT_VARIABLE LD_VERSION)
-        if ("${LD_VERSION}" MATCHES "GNU gold")
-            set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=gold")
-        endif()
-    endif()
-endif()
-
 # Hide the CMake Rules directories in Xcode projects.
 source_group("CMake Rules" REGULAR_EXPRESSION "^$")
 
@@ -128,7 +112,8 @@ set(FISH_SRCS
     src/proc.cpp src/reader.cpp src/redirection.cpp src/sanity.cpp src/screen.cpp
     src/signal.cpp src/termsize.cpp src/timer.cpp src/tinyexpr.cpp
     src/tokenizer.cpp src/topic_monitor.cpp src/trace.cpp src/utf8.cpp src/util.cpp
-    src/wcstringutil.cpp src/wgetopt.cpp src/wildcard.cpp src/wutil.cpp src/fds.cpp
+    src/wait_handle.cpp src/wcstringutil.cpp src/wgetopt.cpp src/wildcard.cpp 
+    src/wutil.cpp src/fds.cpp
 )
 
 # Header files are just globbed.

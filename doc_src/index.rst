@@ -20,6 +20,9 @@ Some of the special features of fish are:
 
 This page explains how to install and set up fish and where to get more information.
 
+Further Reading
+===============
+
 If this is your first time using fish, see the :ref:`tutorial <tutorial>`.
 
 If you are already familiar with other shells like bash and want to see the scripting differences, see :ref:`Fish For Bash Users <fish_for_bash_users>`.
@@ -99,34 +102,30 @@ For a script written in another language, just replace ``/bin/bash`` with the in
 
 This line is only needed when scripts are executed without specifying the interpreter. For functions inside fish or when executing a script with ``fish /path/to/script``, a shebang is not required (but it doesn't hurt!).
 
-.. _initialization:
+.. _configuration:
 
-Initialization files
+Configuration files
 ====================
 
-On startup, Fish evaluates a number of configuration files, which can be used to control the behavior of the shell. The location of these is controlled by a number of environment variables, and their default or usual location is given below.
+When fish is started, it reads and runs its configuration files. Where these are depends on build configuration and environment variables.
 
-Configuration files are evaluated in the following order:
+The main file is ``~/.config/fish/config.fish`` (or more precisely ``$XDG_CONFIG_HOME/fish/config.fish``).
 
-- Configuration shipped with fish, which should not be edited, in ``$__fish_data_dir/config.fish`` (usually ``/usr/share/fish/config.fish``).
+Configuration files are run in the following order:
 
-- Configuration snippets in files ending in ``.fish``, in the directories:
+- Configuration snippets (named ``*.fish``) in the directories:
 
   - ``$__fish_config_dir/conf.d`` (by default, ``~/.config/fish/conf.d/``)
   - ``$__fish_sysconf_dir/conf.d`` (by default, ``/etc/fish/conf.d/``)
-  - Directories for third-party software vendors to ship their own configuration snippets for their software. Fish searches the directories in the ``XDG_DATA_DIRS`` environment variable for a ``fish/vendor_conf.d`` directory; if this variable is not defined, the default is usually to search ``/usr/share/fish/vendor_conf.d`` and ``/usr/local/share/fish/vendor_conf.d``
+  - Directories for other software to ship configuration snippets for their software. Fish searches the directories in the ``XDG_DATA_DIRS`` environment variable for a ``fish/vendor_conf.d`` directory; if that is not defined, the default is ``/usr/share/fish/vendor_conf.d`` and ``/usr/local/share/fish/vendor_conf.d``, unless your distribution customized this.
 
   If there are multiple files with the same name in these directories, only the first will be executed.
   They are executed in order of their filename, sorted (like globs) in a natural order (i.e. "01" sorts before "2").
 
-- System-wide configuration files, where administrators can include initialization that should be run for all users on the system - similar to ``/etc/profile`` for POSIX-style shells - in ``$__fish_sysconf_dir`` (usually ``/etc/fish/config.fish``).
-- User initialization, usually in ``~/.config/fish/config.fish`` (controlled by the ``XDG_CONFIG_HOME`` environment variable, and accessible as ``$__fish_config_dir``).
+- System-wide configuration files, where administrators can include initialization for all users on the system - similar to ``/etc/profile`` for POSIX-style shells - in ``$__fish_sysconf_dir`` (usually ``/etc/fish/config.fish``).
+- User configuration, usually in ``~/.config/fish/config.fish`` (controlled by the ``XDG_CONFIG_HOME`` environment variable, and accessible as ``$__fish_config_dir``).
 
-These paths are controlled by parameters set at build, install, or run time, and may vary from the defaults listed above.
-
-This wide search may be confusing. If you are unsure where to put your own customisations, use ``~/.config/fish/config.fish``.
-
-Note that ``~/.config/fish/config.fish`` is sourced `after` the snippets. This is so users can copy snippets and override some of their behavior.
+``~/.config/fish/config.fish`` is sourced *after* the snippets. This is so you can copy snippets and override some of their behavior.
 
 These files are all executed on the startup of every shell. If you want to run a command only on starting an interactive shell, use the exit status of the command ``status --is-interactive`` to determine if the shell is interactive. If you want to run a command only when using a login shell, use ``status --is-login`` instead. This will speed up the starting of non-interactive or non-login shells.
 
@@ -134,11 +133,13 @@ If you are developing another program, you may wish to install configuration whi
 
 Examples:
 
-If you want to add the directory ``~/linux/bin`` to your PATH variable when using a login shell, add the following to your ``~/.config/fish/config.fish`` file::
+If you want to add the directory ``~/linux/bin`` to your PATH variable when using a login shell, add this to your ``~/.config/fish/config.fish`` file::
 
     if status --is-login
         set -gx PATH $PATH ~/linux/bin
     end
+
+(alternatively use :ref:`fish_add_path <cmd-fish_add_path>` like ``fish_add_path ~/linux/bin``, which only adds the path if it isn't included yet)
 
 If you want to run a set of commands when fish exits, use an :ref:`event handler <event>` that is triggered by the exit of the shell::
 
@@ -160,8 +161,6 @@ If you have a question not answered by this documentation, there are several ave
 
 - The official mailing list at `fish-users@lists.sourceforge.net <https://lists.sourceforge.net/lists/listinfo/fish-users>`_
 
-- The IRC channel, \#fish on ``irc.oftc.net``
-
 If you have an improvement for fish, you can submit it via the GitHub page.
 
 .. _other_pages:
@@ -170,7 +169,7 @@ Other help pages
 ================
 .. toctree::
    :maxdepth: 1
-
+              
    self
    faq
    interactive
@@ -180,5 +179,5 @@ Other help pages
    tutorial
    completions
    design
-   relnotes 
+   relnotes
    license

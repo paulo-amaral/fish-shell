@@ -235,9 +235,6 @@ enum class pipeline_position_t {
 /// Error when using continue outside of loop.
 #define INVALID_CONTINUE_ERR_MSG _(L"'continue' while not inside of loop")
 
-/// Error when using return builtin outside of function definition.
-#define INVALID_RETURN_ERR_MSG _(L"'return' outside of function definition")
-
 // Error messages. The number is a reminder of how many format specifiers are contained.
 
 /// Error for $^.
@@ -262,9 +259,6 @@ enum class pipeline_position_t {
 /// Error issued on $@.
 #define ERROR_NOT_ARGV_AT _(L"$@ is not supported. In fish, please use $argv.")
 
-/// Error issued on $(...).
-#define ERROR_BAD_VAR_SUBCOMMAND1 _(L"$(...) is not supported. In fish, please use '(%ls)'.")
-
 /// Error issued on $*.
 #define ERROR_NOT_ARGV_STAR _(L"$* is not supported. In fish, please use $argv.")
 
@@ -278,5 +272,9 @@ enum class pipeline_position_t {
 /// Error message for a command like `time foo &`.
 #define ERROR_TIME_BACKGROUND \
     _(L"'time' is not supported for background jobs. Consider using 'command time'.")
+
+/// Error issued on { echo; echo }.
+#define ERROR_NO_BRACE_GROUPING \
+    _(L"'{ ... }' is not supported for grouping commands. Please use 'begin; ...; end'")
 
 #endif

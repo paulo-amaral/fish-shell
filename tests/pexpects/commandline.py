@@ -30,3 +30,14 @@ expect_prompt()
 
 sendline("echo foo")
 expect_prompt("foo")
+
+# commandline is empty when a command is executed.
+sendline("set what (commandline)")
+expect_prompt()
+sendline('echo "<$what>"')
+expect_prompt("<>")
+
+# Test for undocumented -I flag.
+# TODO: consider removing.
+sendline("commandline -I foo")
+expect_prompt("foo")

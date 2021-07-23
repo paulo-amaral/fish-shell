@@ -60,6 +60,7 @@
 #include "input_common.h"
 #include "io.h"
 #include "iothread.h"
+#include "kill.h"
 #include "lru.h"
 #include "maybe.h"
 #include "operation_context.h"
@@ -83,7 +84,6 @@
 #include "wcstringutil.h"
 #include "wildcard.h"
 #include "wutil.h"  // IWYU pragma: keep
-#include "kill.h"
 
 static const char *const *s_arguments;
 static int s_test_run_count = 0;
@@ -1671,10 +1671,55 @@ static void test_wcsfilecmp() {
     }
 }
 
+static void test_const_strlen() {
+    do_test(const_strlen("") == 0);
+    do_test(const_strlen(L"") == 0);
+    do_test(const_strlen("\0") == 0);
+    do_test(const_strlen(L"\0") == 0);
+    do_test(const_strlen("\0abc") == 0);
+    do_test(const_strlen(L"\0abc") == 0);
+    do_test(const_strlen("x") == 1);
+    do_test(const_strlen(L"x") == 1);
+    do_test(const_strlen("abc") == 3);
+    do_test(const_strlen(L"abc") == 3);
+    do_test(const_strlen("abc\0def") == 3);
+    do_test(const_strlen(L"abc\0def") == 3);
+    do_test(const_strlen("abcdef\0") == 6);
+    do_test(const_strlen(L"abcdef\0") == 6);
+    static_assert(const_strlen("hello") == 5, "const_strlen failure");
+}
+
+static void test_const_strcmp() {
+    static_assert(const_strcmp("", "a") < 0, "const_strcmp failure");
+    static_assert(const_strcmp("a", "a") == 0, "const_strcmp failure");
+    static_assert(const_strcmp("a", "") > 0, "const_strcmp failure");
+    static_assert(const_strcmp("aa", "a") > 0, "const_strcmp failure");
+    static_assert(const_strcmp("a", "aa") < 0, "const_strcmp failure");
+    static_assert(const_strcmp("b", "aa") > 0, "const_strcmp failure");
+}
+
+static void test_is_sorted_by_name() {
+    struct named_t {
+        const wchar_t *name;
+    };
+
+    static constexpr named_t sorted[] = {
+        {L"a"}, {L"aa"}, {L"aaa"}, {L"aaa"}, {L"aaa"}, {L"aazz"}, {L"aazzzz"},
+    };
+    static_assert(is_sorted_by_name(sorted), "is_sorted_by_name failure");
+    static constexpr named_t not_sorted[] = {
+        {L"a"}, {L"aa"}, {L"aaa"}, {L"q"}, {L"aazz"}, {L"aazz"}, {L"aazz"}, {L"aazzzz"},
+    };
+    static_assert(!is_sorted_by_name(not_sorted), "is_sorted_by_name failure");
+}
+
 static void test_utility_functions() {
     say(L"Testing utility functions");
     test_wcsfilecmp();
     test_parse_util_cmdsubst_extent();
+    test_const_strlen();
+    test_const_strcmp();
+    test_is_sorted_by_name();
 }
 
 // UTF8 tests taken from Alexey Vatchenko's utf8 library. See http://www.bsdua.org/libbsdua.html.
@@ -3375,6 +3420,42 @@ static void test_1_completion(wcstring line, const wcstring &completion, complet
     do_test(cursor_pos == out_cursor_pos);
 }
 
+static void test_wait_handles() {
+    say(L"Testing wait handles");
+    constexpr size_t limit = 4;
+    wait_handle_store_t whs(limit);
+    do_test(whs.size() == 0);
+
+    // Null handles ignored.
+    whs.add(wait_handle_ref_t{});
+    do_test(whs.size() == 0);
+    do_test(whs.get_by_pid(5) == nullptr);
+
+    // Duplicate pids drop oldest.
+    whs.add(std::make_shared<wait_handle_t>(5, L"first"));
+    whs.add(std::make_shared<wait_handle_t>(5, L"second"));
+    do_test(whs.size() == 1);
+    do_test(whs.get_by_pid(5)->base_name == L"second");
+
+    whs.remove_by_pid(123);
+    do_test(whs.size() == 1);
+    whs.remove_by_pid(5);
+    do_test(whs.size() == 0);
+
+    // Test evicting oldest.
+    whs.add(std::make_shared<wait_handle_t>(1, L"1"));
+    whs.add(std::make_shared<wait_handle_t>(2, L"2"));
+    whs.add(std::make_shared<wait_handle_t>(3, L"3"));
+    whs.add(std::make_shared<wait_handle_t>(4, L"4"));
+    whs.add(std::make_shared<wait_handle_t>(5, L"5"));
+    do_test(whs.size() == 4);
+    auto start = whs.get_list().begin();
+    do_test(std::next(start, 0)->get()->base_name == L"5");
+    do_test(std::next(start, 1)->get()->base_name == L"4");
+    do_test(std::next(start, 2)->get()->base_name == L"3");
+    do_test(std::next(start, 3)->get()->base_name == L"2");
+}
+
 static void test_completion_insertions() {
 #define TEST_1_COMPLETION(a, b, c, d, e) test_1_completion(a, b, c, d, e, __LINE__)
     say(L"Testing completion insertions");
@@ -3763,7 +3844,8 @@ static void test_undo() {
 
 static int test_universal_helper(int x) {
     callback_data_list_t callbacks;
-    env_universal_t uvars(UVARS_TEST_PATH);
+    env_universal_t uvars;
+    uvars.initialize_at_path(callbacks, UVARS_TEST_PATH);
     for (int j = 0; j < UVARS_PER_THREAD; j++) {
         const wcstring key = format_string(L"key_%d_%d", x, j);
         const wcstring val = format_string(L"val_%d_%d", x, j);
@@ -3793,12 +3875,9 @@ static void test_universal() {
     }
     iothread_drain_all();
 
-    env_universal_t uvars(UVARS_TEST_PATH);
+    env_universal_t uvars;
     callback_data_list_t callbacks;
-    bool loaded = uvars.initialize(callbacks);
-    if (!loaded) {
-        err(L"Failed to load universal variables");
-    }
+    uvars.initialize_at_path(callbacks, UVARS_TEST_PATH);
     for (int i = 0; i < threads; i++) {
         for (int j = 0; j < UVARS_PER_THREAD; j++) {
             const wcstring key = format_string(L"key_%d_%d", i, j);
@@ -3896,8 +3975,10 @@ static void test_universal_callbacks() {
     say(L"Testing universal callbacks");
     if (system("mkdir -p test/fish_uvars_test/")) err(L"mkdir failed");
     callback_data_list_t callbacks;
-    env_universal_t uvars1(UVARS_TEST_PATH);
-    env_universal_t uvars2(UVARS_TEST_PATH);
+    env_universal_t uvars1;
+    env_universal_t uvars2;
+    uvars1.initialize_at_path(callbacks, UVARS_TEST_PATH);
+    uvars2.initialize_at_path(callbacks, UVARS_TEST_PATH);
 
     env_var_t::env_var_flags_t noflags = 0;
 
@@ -3977,11 +4058,12 @@ static void test_universal_ok_to_save() {
     do_test(before_id != kInvalidFileID && "UVARS_TEST_PATH should be readable");
 
     callback_data_list_t cbs;
-    env_universal_t uvars(UVARS_TEST_PATH);
-    do_test(uvars.is_ok_to_save() && "Should be OK to save before sync");
+    env_universal_t uvars;
+    uvars.initialize_at_path(cbs, UVARS_TEST_PATH);
+    do_test(!uvars.is_ok_to_save() && "Should not be OK to save");
     uvars.sync(cbs);
     cbs.clear();
-    do_test(!uvars.is_ok_to_save() && "Should no longer be OK to save");
+    do_test(!uvars.is_ok_to_save() && "Should still not be OK to save");
     uvars.set(L"SOMEVAR", env_var_t{wcstring{L"SOMEVALUE"}, 0});
     uvars.sync(cbs);
 
@@ -4002,27 +4084,10 @@ bool poll_notifier(const std::unique_ptr<universal_notifier_t> &note) {
     return result;
 }
 
-static void trigger_or_wait_for_notification(universal_notifier_t::notifier_strategy_t strategy) {
-    switch (strategy) {
-        case universal_notifier_t::strategy_shmem_polling: {
-            break;  // nothing required
-        }
-        case universal_notifier_t::strategy_notifyd: {
-            // notifyd requires a round trip to the notifyd server, which means we have to wait a
-            // little bit to receive it. In practice 40 ms seems to be enough.
-            usleep(40000);
-            break;
-        }
-        case universal_notifier_t::strategy_named_pipe: {
-            break;  // nothing required
-        }
-    }
-}
-
 static void test_notifiers_with_strategy(universal_notifier_t::notifier_strategy_t strategy) {
     say(L"Testing universal notifiers with strategy %d", (int)strategy);
-    std::unique_ptr<universal_notifier_t> notifiers[16];
-    size_t notifier_count = sizeof notifiers / sizeof *notifiers;
+    constexpr size_t notifier_count = 16;
+    std::unique_ptr<universal_notifier_t> notifiers[notifier_count];
 
     // Populate array of notifiers.
     for (size_t i = 0; i < notifier_count; i++) {
@@ -4041,20 +4106,30 @@ static void test_notifiers_with_strategy(universal_notifier_t::notifier_strategy
     for (size_t post_idx = 0; post_idx < notifier_count; post_idx++) {
         notifiers[post_idx]->post_notification();
 
-        // Do special stuff to "trigger" a notification for testing.
-        trigger_or_wait_for_notification(strategy);
+        if (strategy == universal_notifier_t::strategy_notifyd) {
+            // notifyd requires a round trip to the notifyd server, which means we have to wait a
+            // little bit to receive it. In practice 40 ms seems to be enough.
+            usleep(40000);
+        }
 
         for (size_t i = 0; i < notifier_count; i++) {
+            bool polled = poll_notifier(notifiers[i]);
+
             // We aren't concerned with the one who posted. Poll from it (to drain it), and then
             // skip it.
             if (i == post_idx) {
-                poll_notifier(notifiers[i]);
                 continue;
             }
 
-            if (!poll_notifier(notifiers[i])) {
+            if (!polled) {
                 err(L"Universal variable notifier (%lu) %p polled failed to notice changes, with "
                     L"strategy %d",
+                    i, notifiers[i].get(), (int)strategy);
+                continue;
+            }
+            // It should not poll again immediately.
+            if (poll_notifier(notifiers[i])) {
+                err(L"Universal variable notifier (%lu) %p polled twice in a row with strategy %d",
                     i, notifiers[i].get(), (int)strategy);
             }
         }
@@ -4624,6 +4699,8 @@ void history_tests_t::test_history_formats() {
         // We don't expect whitespace to be elided (#4908: except for leading/trailing whitespace)
         const wchar_t *expected[] = {L"EOF",
                                      L"sleep 123",
+                                     L"posix_cmd_sub $(is supported but only splits on newlines)",
+                                     L"posix_cmd_sub \"$(is supported)\"",
                                      L"a && echo valid construct",
                                      L"final line",
                                      L"echo supsup",
@@ -5072,9 +5149,7 @@ static void test_error_messages() {
                        {L"echo $", ERROR_NO_VAR_NAME},
                        {L"echo foo\"$\"bar", ERROR_NO_VAR_NAME},
                        {L"echo \"foo\"$\"bar\"", ERROR_NO_VAR_NAME},
-                       {L"echo foo $ bar", ERROR_NO_VAR_NAME},
-                       {L"echo foo$(foo)bar", ERROR_BAD_VAR_SUBCOMMAND1},
-                       {L"echo \"foo$(foo)bar\"", ERROR_BAD_VAR_SUBCOMMAND1}};
+                       {L"echo foo $ bar", ERROR_NO_VAR_NAME}};
 
     parse_error_list_t errors;
     for (const auto &test : error_tests) {
@@ -5163,6 +5238,22 @@ static void test_highlighting() {
         {L")", highlight_role_t::operat},
         {L"|", highlight_role_t::statement_terminator},
         {L"cat", highlight_role_t::command},
+    });
+    highlight_tests.push_back({
+        {L"true", highlight_role_t::command},
+        {L"$(", highlight_role_t::operat},
+        {L"true", highlight_role_t::command},
+        {L")", highlight_role_t::operat},
+    });
+    highlight_tests.push_back({
+        {L"true", highlight_role_t::command},
+        {L"\"before", highlight_role_t::quote},
+        {L"$(", highlight_role_t::operat},
+        {L"true", highlight_role_t::command},
+        {L"param1", highlight_role_t::param},
+        {L")", highlight_role_t::operat},
+        {L"after\"", highlight_role_t::quote},
+        {L"param2", highlight_role_t::param},
     });
 
     // Redirections substitutions.
@@ -6618,6 +6709,7 @@ int main(int argc, char **argv) {
     if (should_test_function("universal")) test_universal_formats();
     if (should_test_function("universal")) test_universal_ok_to_save();
     if (should_test_function("notifiers")) test_universal_notifiers();
+    if (should_test_function("wait_handles")) test_wait_handles();
     if (should_test_function("completion_insertions")) test_completion_insertions();
     if (should_test_function("autosuggestion_ignores")) test_autosuggestion_ignores();
     if (should_test_function("autosuggestion_combining")) test_autosuggestion_combining();

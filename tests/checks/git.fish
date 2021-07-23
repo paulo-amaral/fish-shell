@@ -6,8 +6,11 @@
 # Tests run from git (e.g. git rebase --exec 'ninja test'...) inherit a weird git environment.
 # Ensure that no git environment variables are inherited.
 for varname in (set -x | string match 'GIT_*' | string replace -r ' .*' '')
-   set -e $varname
+    set -e $varname
 end
+
+set -gx GIT_CONFIG_GLOBAL /dev/null # No ~/.gitconfig. We could also override $HOME.
+set -gx GIT_CONFIG_NOSYSTEM true # No /etc/gitconfig
 
 # Also ensure that git-core is not in $PATH, as this adds weird git commands like `git-add--interactive`.
 set PATH (string match --invert '*git-core*' -- $PATH)
@@ -32,6 +35,10 @@ touch foo
 
 complete -C'git add '
 #CHECK: foo	Untracked file
+
+git config alias.s status
+complete 'git s --s'
+# CHECK --short
 
 # Note: We can't rely on the initial branch because that might be
 # "master", or it could be changed to something else in future!

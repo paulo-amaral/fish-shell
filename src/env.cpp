@@ -29,13 +29,13 @@
 #include "global_safety.h"
 #include "history.h"
 #include "input.h"
+#include "kill.h"
 #include "path.h"
 #include "proc.h"
 #include "reader.h"
 #include "termsize.h"
 #include "wcstringutil.h"
 #include "wutil.h"  // IWYU pragma: keep
-#include "kill.h"
 
 /// Some configuration path environment variables.
 #define FISH_DATADIR_VAR L"__fish_data_dir"
@@ -57,11 +57,17 @@ bool curses_initialized = false;
 /// Does the terminal have the "eat_newline_glitch".
 bool term_has_xn = false;
 
-/// Universal variables global instance. Initialized in env_init.
-static latch_t<env_universal_t> s_universal_variables;
-
 /// Getter for universal variables.
-static env_universal_t *uvars() { return s_universal_variables; }
+/// This is typically initialized in env_init(), and is considered empty before then.
+static acquired_lock<env_universal_t> uvars() {
+    // Leaked to avoid shutdown dtor registration.
+    static owning_lock<env_universal_t> *const s_universal_variables =
+        new owning_lock<env_universal_t>();
+    return s_universal_variables->acquire();
+}
+
+/// Whether we were launched with no_config; in this case setting a uvar instead sets a global.
+static relaxed_atomic_bool_t s_uvar_scope_is_global{false};
 
 bool env_universal_barrier() { return env_stack_t::principal().universal_barrier(); }
 
@@ -101,7 +107,7 @@ static constexpr const electric_var_t electric_variables[] = {
     {L"umask", electric_var_t::fcomputed},
     {L"version", electric_var_t::freadonly},
 };
-ASSERT_SORT_ORDER(electric_variables, .name);
+ASSERT_SORTED_BY_NAME(electric_variables);
 
 const electric_var_t *electric_var_t::for_name(const wchar_t *name) {
     auto begin = std::begin(electric_variables);
@@ -238,7 +244,11 @@ static void setup_path() {
         // _CS_PATH: colon-separated paths to find POSIX utilities
         std::string cspath;
         cspath.resize(confstr(_CS_PATH, nullptr, 0));
-        confstr(_CS_PATH, &cspath[0], cspath.length());
+        if (cspath.length() > 0) {
+            confstr(_CS_PATH, &cspath[0], cspath.length());
+            // remove the trailing null-terminator
+            cspath.resize(cspath.length() - 1);
+        }
 #else
         std::string cspath = "/usr/bin:/bin";  // I doubt this is even necessary
 #endif
@@ -283,7 +293,7 @@ void env_init(const struct config_paths_t *paths, bool do_uvars, bool default_pa
         vars.set_one(FISH_HELPDIR_VAR, ENV_GLOBAL, paths->doc);
         vars.set_one(FISH_BIN_DIR, ENV_GLOBAL, paths->bin);
         if (default_paths) {
-           wcstring scstr = paths->data;
+            wcstring scstr = paths->data;
             scstr.append(L"/functions");
             vars.set_one(L"fish_function_path", ENV_GLOBAL, scstr);
         }
@@ -415,18 +425,21 @@ void env_init(const struct config_paths_t *paths, bool do_uvars, bool default_pa
     init_input();
 
     // Complain about invalid config paths.
-    path_emit_config_directory_errors(vars);
+    path_emit_config_directory_messages(vars);
 
-    if (do_uvars) {
-        // Set up universal variables. The empty string means to use the default path.
-        s_universal_variables.emplace(L"");
+    // Initialize our uvars if requested.
+    if (!do_uvars) {
+        s_uvar_scope_is_global = true;
+    } else {
+        // Set up universal variables using the default path.
         callback_data_list_t callbacks;
-        s_universal_variables->initialize(callbacks);
+        uvars()->initialize(callbacks);
         env_universal_callbacks(&vars, callbacks);
 
         // Do not import variables that have the same name and value as
         // an exported universal variable. See issues #5258 and #5348.
-        for (const auto &kv : uvars()->get_table()) {
+        var_table_t table = uvars()->get_table();
+        for (const auto &kv : table) {
             const wcstring &name = kv.first;
             const env_var_t &uvar = kv.second;
             if (!uvar.exports()) continue;
@@ -597,7 +610,7 @@ class env_scoped_impl_t : public environment_t {
     void enumerate_generations(const Func &func) const {
         // Our uvars generation count doesn't come from next_export_generation(), so always supply
         // it even if it's 0.
-        func(uvars() ? uvars()->get_export_generation() : 0);
+        func(uvars()->get_export_generation());
         if (globals_->exports()) func(globals_->export_gen);
         for (auto node = locals_; node; node = node->next) {
             if (node->exports()) func(node->export_gen);
@@ -663,17 +676,15 @@ std::shared_ptr<owning_null_terminated_array_t> env_scoped_impl_t::create_export
     get_exported(this->globals_, vals);
     get_exported(this->locals_, vals);
 
-    if (uvars()) {
-        const wcstring_list_t uni = uvars()->get_names(true, false);
-        for (const wcstring &key : uni) {
-            auto var = uvars()->get(key);
-            assert(var && "Variable should be present in uvars");
-            // Note that std::map::insert does NOT overwrite a value already in the map,
-            // which we depend on here.
-            // Note: Using std::move around make_pair prevents the compiler from implementing
-            // copy elision.
-            vals.insert(std::make_pair(key, std::move(*var)));
-        }
+    const wcstring_list_t uni = uvars()->get_names(true, false);
+    for (const wcstring &key : uni) {
+        auto var = uvars()->get(key);
+        assert(var && "Variable should be present in uvars");
+        // Note that std::map::insert does NOT overwrite a value already in the map,
+        // which we depend on here.
+        // Note: Using std::move around make_pair prevents the compiler from implementing
+        // copy elision.
+        vals.insert(std::make_pair(key, std::move(*var)));
     }
 
     // Dorky way to add our single exported computed variable.
@@ -718,7 +729,7 @@ maybe_t<env_var_t> env_scoped_impl_t::try_get_computed(const wcstring &key) cons
             return none();
         }
 
-        std::shared_ptr<history_t> history = reader_get_history();
+        std::shared_ptr<history_t> history = commandline_get_state().history;
         if (!history) {
             history = history_t::with_name(history_session_id(*this));
         }
@@ -778,12 +789,7 @@ maybe_t<env_var_t> env_scoped_impl_t::try_get_global(const wcstring &key) const 
 }
 
 maybe_t<env_var_t> env_scoped_impl_t::try_get_universal(const wcstring &key) const {
-    if (!uvars()) return none();
-    auto var = uvars()->get(key);
-    if (var) {
-        return var;
-    }
-    return none();
+    return uvars()->get(key);
 }
 
 maybe_t<env_var_t> env_scoped_impl_t::get(const wcstring &key, env_mode_flags_t mode) const {
@@ -841,7 +847,7 @@ wcstring_list_t env_scoped_impl_t::get_names(int flags) const {
         }
     }
 
-    if (query.universal && uvars()) {
+    if (query.universal) {
         const wcstring_list_t uni_list = uvars()->get_names(query.exports, query.unexports);
         names.insert(uni_list.begin(), uni_list.end());
     }
@@ -1110,7 +1116,6 @@ maybe_t<int> env_stack_impl_t::try_set_electric(const wcstring &key, const query
 void env_stack_impl_t::set_universal(const wcstring &key, wcstring_list_t val,
                                      const query_t &query) {
     ASSERT_IS_MAIN_THREAD();
-    if (!uvars()) return;
     auto oldvar = uvars()->get(key);
     // Resolve whether or not to export.
     bool exports = false;
@@ -1179,10 +1184,10 @@ mod_result_t env_stack_impl_t::set(const wcstring &key, env_mode_flags_t mode,
         // The user requested a particular scope.
         //
         // If we don't have uvars, fall back to using globals
-        if (query.universal && uvars()) {
+        if (query.universal && !s_uvar_scope_is_global) {
             set_universal(key, std::move(val), query);
             result.uvar_modified = true;
-        } else if (query.global || (query.universal && !uvars())) {
+        } else if (query.global || (query.universal && s_uvar_scope_is_global)) {
             set_in_node(globals_, key, std::move(val), flags);
             result.global_modified = true;
         } else if (query.local) {
@@ -1198,7 +1203,7 @@ mod_result_t env_stack_impl_t::set(const wcstring &key, env_mode_flags_t mode,
         // Existing global variable.
         set_in_node(node, key, std::move(val), flags);
         result.global_modified = true;
-    } else if (uvars() && uvars()->get(key)) {
+    } else if (uvars()->get(key)) {
         // Existing universal variable.
         set_universal(key, std::move(val), query);
         result.uvar_modified = true;
@@ -1220,14 +1225,11 @@ mod_result_t env_stack_impl_t::remove(const wcstring &key, int mode) {
         return mod_result_t{ENV_SCOPE};
     }
 
-    // Helper to remove from uvars.
-    auto remove_from_uvars = [&] { return uvars() && uvars()->remove(key); };
-
     mod_result_t result{ENV_OK};
     if (query.has_scope) {
         // The user requested erasing from a particular scope.
         if (query.universal) {
-            result.status = remove_from_uvars() ? ENV_OK : ENV_NOT_FOUND;
+            result.status = uvars()->remove(key) ? ENV_OK : ENV_NOT_FOUND;
             result.uvar_modified = true;
         } else if (query.global) {
             result.status = remove_from_chain(globals_, key) ? ENV_OK : ENV_NOT_FOUND;
@@ -1241,7 +1243,7 @@ mod_result_t env_stack_impl_t::remove(const wcstring &key, int mode) {
         // pass
     } else if (remove_from_chain(globals_, key)) {
         result.global_modified = true;
-    } else if (remove_from_uvars()) {
+    } else if (uvars()->remove(key)) {
         result.uvar_modified = true;
     } else {
         result.status = ENV_NOT_FOUND;
@@ -1256,7 +1258,7 @@ bool env_stack_t::universal_barrier() {
     if (!is_principal()) return false;
 
     ASSERT_IS_MAIN_THREAD();
-    if (!uvars()) return false;
+    if (s_uvar_scope_is_global) return false;
 
     callback_data_list_t callbacks;
     bool changed = uvars()->sync(callbacks);

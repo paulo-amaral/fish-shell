@@ -296,20 +296,10 @@ static int fish_parse_opt(int argc, char **argv, fish_cmd_opts_t *opts) {
                 break;
             }
             case 'd': {
-                char *end;
-                long tmp;
-
-                errno = 0;
-                tmp = strtol(optarg, &end, 10);
-
-                if (tmp >= 0 && tmp <= 10 && !*end && !errno) {
-                    debug_level = static_cast<int>(tmp);
-                } else {
-                    activate_flog_categories_by_pattern(str2wcstring(optarg));
-                }
+                activate_flog_categories_by_pattern(str2wcstring(optarg));
                 for (auto cat : get_flog_categories()) {
                     if (cat->enabled) {
-                        printf("Debug enabled for category: %ls\n", cat->name);
+                        std::fwprintf(stdout, L"Debug enabled for category: %ls\n", cat->name);
                     }
                 }
                 break;
@@ -497,9 +487,6 @@ int main(int argc, char **argv) {
     misc_init();
     reader_init();
 
-    // And now enable "job control" for everything.
-    set_job_control_mode(job_control_t::all);
-
     parser_t &parser = parser_t::principal_parser();
 
     if (!opts.no_exec && !opts.no_config) {
@@ -577,9 +564,7 @@ int main(int argc, char **argv) {
     }
 
     int exit_status = res ? STATUS_CMD_UNKNOWN : parser.get_last_status();
-
-    event_fire(parser,
-               proc_create_event(L"PROCESS_EXIT", event_type_t::exit, getpid(), exit_status));
+    event_fire(parser, event_t::process_exit(getpid(), exit_status));
 
     // Trigger any exit handlers.
     wcstring_list_t event_args = {to_string(exit_status)};

@@ -39,7 +39,7 @@ Note that special input functions cannot be combined with ordinary shell script 
 
 If no ``SEQUENCE`` is provided, all bindings (or just the bindings in the given ``MODE``) are printed. If ``SEQUENCE`` is provided but no ``COMMAND``, just the binding matching that sequence is printed.
 
-To save custom keybindings, put the ``bind`` statements into :ref:`config.fish <initialization>`. Alternatively, fish also automatically executes a function called ``fish_user_key_bindings`` if it exists.
+To save custom keybindings, put the ``bind`` statements into :ref:`config.fish <configuration>`. Alternatively, fish also automatically executes a function called ``fish_user_key_bindings`` if it exists.
 
 Key bindings may use "modes", which mimics Vi's modal input behavior. The default mode is "default", and every bind applies to a single mode. The mode can be viewed/changed with the ``$fish_bind_mode`` variable.
 
@@ -216,6 +216,10 @@ The following functions are included as normal functions, but are particularly u
 - ``fish_clipboard_copy``, copy the current selection to the system clipboard
 
 - ``fish_clipboard_paste``, paste the current selection from the system clipboard before the cursor
+
+- ``fish_commandline_append``, append the argument to the command-line. If the command-line already ends with the argument, this removes the suffix instead. Starts with the last command from history if the command-line is empty.
+
+- ``fish_commandline_prepend``, prepend the argument to the command-line. If the command-line already starts with the argument, this removes the prefix instead. Starts with the last command from history if the command-line is empty.
 
 Examples
 --------

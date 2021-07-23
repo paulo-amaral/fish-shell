@@ -1,7 +1,7 @@
 .. _interactive:
 
 Interactive use
-***************
+===============
 
 Fish prides itself on being really nice to use interactively. That's down to a few features we'll explain in the next few sections.
 
@@ -84,6 +84,88 @@ When the cursor is over a parenthesis or a quote, fish also highlights its match
 
 To customize the syntax highlighting, you can set the environment variables listed in the :ref:`Variables for changing highlighting colors <variables-color>` section.
 
+.. _variables-color:
+
+Syntax highlighting variables
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The colors used by fish for syntax highlighting can be configured by changing the values of a various variables. The value of these variables can be one of the colors accepted by the :ref:`set_color <cmd-set_color>` command. The modifier switches accepted by ``set_color`` like ``--bold``, ``--dim``, ``--italics``, ``--reverse`` and ``--underline`` are also accepted.
+
+
+Example: to make errors highlighted and red, use::
+
+    set fish_color_error red --bold
+
+
+The following variables are available to change the highlighting colors in fish:
+
+==========================================                 =====================================================================
+Variable                                                   Meaning
+==========================================                 =====================================================================
+``fish_color_normal``                                      default color
+``fish_color_command``                                     commands like echo
+``fish_color_keyword``                                     keywords like if - this falls back on the command color if unset
+``fish_color_quote``                                       quoted text like "abc"
+``fish_color_redirection``                                 IO redirections like >/dev/null
+``fish_color_end``                                         process separators like ';' and '&'
+``fish_color_error``                                       syntax errors
+``fish_color_param``                                       ordinary command parameters
+``fish_color_comment``                                     comments like '# important'
+``fish_color_selection``                                   selected text in vi visual mode
+``fish_color_operator``                                    parameter expansion operators like '*' and '~'
+``fish_color_escape``                                      character escapes like '\n' and '\x70'
+``fish_color_autosuggestion``                              autosuggestions (the proposed rest of a command)
+``fish_color_cwd``                                         the current working directory in the default prompt
+``fish_color_user``                                        the username in the default prompt
+``fish_color_host``                                        the hostname in the default prompt
+``fish_color_host_remote``                                 the hostname in the default prompt for remote sessions (like ssh)
+``fish_color_cancel``                                      the '^C' indicator on a canceled command
+``fish_color_search_match``                                history search matches and selected pager items (background only)
+==========================================                 =====================================================================
+
+If a variable isn't set, fish usually tries ``$fish_color_normal``, except for ``$fish_color_keyword``, where it tries ``$fish_color_command`` first.
+
+.. _variables-color-pager:
+
+Pager color variables
+^^^^^^^^^^^^^^^^^^^^^^^
+
+fish will sometimes present a list of choices in a table, called the pager.
+
+Example: to set the background of each pager row, use::
+
+    set fish_pager_color_background --background=white
+
+To have black text on alternating white and gray backgrounds::
+
+    set fish_pager_color_prefix black
+    set fish_pager_color_completion black
+    set fish_pager_color_description black
+    set fish_pager_color_background --background=white
+    set fish_pager_color_secondary_background --background=brwhite
+
+Variables affecting the pager colors:
+
+==========================================                 ===========================================================
+Variable                                                   Meaning
+==========================================                 ===========================================================
+``fish_pager_color_progress``                              the progress bar at the bottom left corner
+``fish_pager_color_background``                            the background color of a line
+``fish_pager_color_prefix``                                the prefix string, i.e. the string that is to be completed
+``fish_pager_color_completion``                            the completion itself, i.e. the proposed rest of the string
+``fish_pager_color_description``                           the completion description
+``fish_pager_color_selected_background``                   background of the selected completion
+``fish_pager_color_selected_prefix``                       prefix of the selected completion
+``fish_pager_color_selected_completion``                   suffix of the selected completion
+``fish_pager_color_selected_description``                  description of the selected completion
+``fish_pager_color_secondary_background``                  background of every second unselected completion
+``fish_pager_color_secondary_prefix``                      prefix of every second unselected completion
+``fish_pager_color_secondary_completion``                  suffix of every second unselected completion
+``fish_pager_color_secondary_description``                 description of every second unselected completion
+==========================================                 ===========================================================
+
+When the secondary or selected variables aren't set, the normal variables are used, except for ``$fish_pager_color_selected_background``, where the background of ``$fish_color_search_match`` is tried first.
+
 .. _abbreviations:
 
 Abbreviations
@@ -144,7 +226,7 @@ If ``$fish_private_mode`` is set to a non-empty value, commands will not be writ
 
 You can also launch with ``fish --private`` (or ``fish -P`` for short). This both hides old history and prevents writing history to disk. This is useful to avoid leaking personal information (e.g. for screencasts) or when dealing with sensitive information.
 
-You can query the variable ``fish_private_mode`` (``if set -q fish_private_mode ...``) if you would like to respect the user's wish for privacy and alter the behavior of your own fish scripts.
+You can query the variable ``fish_private_mode`` (``if test -n "$fish_private_mode" ...``) if you would like to respect the user's wish for privacy and alter the behavior of your own fish scripts.
 
 .. _editor:
 
@@ -177,6 +259,10 @@ Some bindings are common across Emacs and Vi mode, because they aren't text edit
 - :kbd:`Tab` :ref:`completes <tab-completion>` the current token. :kbd:`Shift`\ +\ :kbd:`Tab` completes the current token and starts the pager's search mode.
 
 - :kbd:`←` (Left) and :kbd:`→` (Right) move the cursor left or right by one character. If the cursor is already at the end of the line, and an autosuggestion is available, :kbd:`→` accepts the autosuggestion.
+
+- :kbd:`Enter` executes the current commandline or inserts a newline if it's not complete yet (e.g. a ``)`` or ``end`` is missing).
+
+- :kbd:`Alt`\ +\ :kbd:`Enter` inserts a newline at the cursor position.
 
 - :kbd:`Alt`\ +\ :kbd:`←` and :kbd:`Alt`\ +\ :kbd:`→` move the cursor one word left or right (to the next space or punctuation mark), or moves forward/backward in the directory history if the command line is empty. If the cursor is already at the end of the line, and an autosuggestion is available, :kbd:`Alt`\ +\ :kbd:`→` (or :kbd:`Alt`\ +\ :kbd:`F`) accepts the first word in the suggestion.
 
@@ -227,6 +313,8 @@ Some bindings are common across Emacs and Vi mode, because they aren't text edit
 Emacs mode commands
 -------------------
 
+To enable emacs mode, use ``fish_default_key_bindings``. This is also the default.
+
 - :kbd:`Home` or :kbd:`Control`\ +\ :kbd:`A` moves the cursor to the beginning of the line.
 
 - :kbd:`End` or :kbd:`Control`\ +\ :kbd:`E` moves to the end of line. If the cursor is already at the end of the line, and an autosuggestion is available, :kbd:`End` or :kbd:`Control`\ +\ :kbd:`E` accepts the autosuggestion.
@@ -261,6 +349,8 @@ Vi mode commands
 ----------------
 
 Vi mode allows for the use of Vi-like commands at the prompt. Initially, :ref:`insert mode <vi-mode-insert>` is active. :kbd:`Escape` enters :ref:`command mode <vi-mode-command>`. The commands available in command, insert and visual mode are described below. Vi mode shares :ref:`some bindings <shared-binds>` with :ref:`Emacs mode <emacs-mode>`.
+
+To enable vi mode, use ``fish_vi_key_bindings``.
 
 It is also possible to add all emacs-mode bindings to vi-mode by using something like::
 
@@ -353,6 +443,18 @@ Visual mode
 
 - :kbd:`Escape` and :kbd:`Control`\ +\ :kbd:`C` enter :ref:`command mode <vi-mode-command>`.
 
+- :kbd:`c` and :kbd:`s` remove the selection and switch to insert mode
+
+- :kbd:`d` and :kbd:`x` remove the selection and switch to normal mode
+
+- :kbd:`X` removes the entire line and switches to normal mode
+
+- :kbd:`y` copies the selection and switches to normal mode
+
+- :kbd:`~` toggles the case (upper/lower) on the selection and switches to normal mode
+
+- :kbd:`"*y` copies the selection to the clipboard and switches to normal mode
+
 .. _custom-binds:
 
 Custom bindings
@@ -363,7 +465,7 @@ In addition to the standard bindings listed here, you can also define your own w
   # Just clear the commandline on control-c
   bind \cc 'commandline -r ""'
 
-Put ``bind`` statements into :ref:`config.fish <initialization>` or a function called ``fish_user_key_bindings``.
+Put ``bind`` statements into :ref:`config.fish <configuration>` or a function called ``fish_user_key_bindings``.
 
 The key sequence (the ``\cc``) here depends on your setup, in particular the terminal. To find out what the terminal sends use :ref:`fish_key_reader <cmd-fish_key_reader>`::
 
@@ -425,7 +527,7 @@ After a command has been executed, it is remembered in the history list. Any dup
 
 By pressing :kbd:`Alt`\ +\ :kbd:`↑` and :kbd:`Alt`\ +\ :kbd:`↓`, a history search is also performed, but instead of searching for a complete commandline, each commandline is broken into separate elements just like it would be before execution, and the history is searched for an element matching that under the cursor.
 
-History searches are case-insensitive unless the search string contains an uppercase character, and they can be aborted by pressing the escape key.
+History searches are case-insensitive unless the search string contains an uppercase character. You can stop a search to edit your search string by pressing :kbd:`Esc` or :kbd:`Page Down`.
 
 Prefixing the commandline with a space will prevent the entire line from being stored in the history.
 

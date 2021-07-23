@@ -87,8 +87,8 @@ static relaxed_atomic_t<wchar_t> obfuscation_read_char;
 wchar_t get_obfuscation_read_char() { return obfuscation_read_char; }
 
 bool g_profiling_active = false;
+
 const wchar_t *program_name;
-std::atomic<int> debug_level{1};  // default maximum debug output level (errors and warnings)
 
 /// Be able to restore the term's foreground process group.
 /// This is set during startup and not modified after.
@@ -501,9 +501,7 @@ void append_format(wcstring &str, const wchar_t *format, ...) {
     va_end(va);
 }
 
-wchar_t *quote_end(const wchar_t *pos) {
-    wchar_t c = *pos;
-
+const wchar_t *quote_end(const wchar_t *pos, wchar_t quote) {
     while (true) {
         pos++;
 
@@ -513,8 +511,11 @@ wchar_t *quote_end(const wchar_t *pos) {
             pos++;
             if (!*pos) return nullptr;
         } else {
-            if (*pos == c) {
-                return const_cast<wchar_t *>(pos);
+            if (*pos == quote ||
+                // Command substitutions also end a double quoted string.  This is how we
+                // support command substitutions inside double quotes.
+                (quote == L'"' && *pos == L'$' && *(pos + 1) == L'(')) {
+                return pos;
             }
         }
     }
@@ -606,48 +607,6 @@ static void debug_shared(const wchar_t level, const wcstring &msg) {
         std::fwprintf(stderr, L"<%lc> %ls: %d: %ls\n", level, program_name, current_pid,
                       msg.c_str());
     }
-}
-
-void debug_safe(int level, const char *msg, const char *param1, const char *param2,
-                const char *param3, const char *param4, const char *param5, const char *param6,
-                const char *param7, const char *param8, const char *param9, const char *param10,
-                const char *param11, const char *param12) {
-    const char *const params[] = {param1, param2, param3, param4,  param5,  param6,
-                                  param7, param8, param9, param10, param11, param12};
-    if (!msg) return;
-
-    // Can't call fwprintf, that may allocate memory Just call write() over and over.
-    if (level > debug_level) return;
-    int errno_old = errno;
-
-    size_t param_idx = 0;
-    const char *cursor = msg;
-    while (*cursor != '\0') {
-        const char *end = std::strchr(cursor, '%');
-        if (end == nullptr) end = cursor + std::strlen(cursor);
-
-        ignore_result(write(STDERR_FILENO, cursor, end - cursor));
-
-        if (end[0] == '%' && end[1] == 's') {
-            // Handle a format string.
-            assert(param_idx < sizeof params / sizeof *params);
-            const char *format = params[param_idx++];
-            if (!format) format = "(null)";
-            ignore_result(write(STDERR_FILENO, format, std::strlen(format)));
-            cursor = end + 2;
-        } else if (end[0] == '\0') {
-            // Must be at the end of the string.
-            cursor = end;
-        } else {
-            // Some other format specifier, just skip it.
-            cursor = end + 1;
-        }
-    }
-
-    // We always append a newline.
-    ignore_result(write(STDERR_FILENO, "\n", 1));
-
-    errno = errno_old;
 }
 
 // Careful to not negate LLONG_MIN.
@@ -894,6 +853,22 @@ static bool unescape_string_var(const wchar_t *in, wcstring *out) {
 
     *out = str2wcstring(result);
     return true;
+}
+
+wcstring escape_string_for_double_quotes(wcstring in) {
+    // We need to escape backslashes, double quotes, and dollars only.
+    wcstring result = std::move(in);
+    size_t idx = result.size();
+    while (idx--) {
+        switch (result[idx]) {
+            case L'\\':
+            case L'$':
+            case L'"':
+                result.insert(idx, 1, L'\\');
+                break;
+        }
+    }
+    return result;
 }
 
 /// Escape a string in a fashion suitable for using in fish script. Store the result in out_str.
@@ -1155,7 +1130,7 @@ static maybe_t<wchar_t> string_last_char(const wcstring &str) {
 }
 
 /// Given a null terminated string starting with a backslash, read the escape as if it is unquoted,
-/// appending to result. Return the number of characters consumed, or 0 on error.
+/// appending to result. Return the number of characters consumed, or none on error.
 maybe_t<size_t> read_unquoted_escape(const wchar_t *input, wcstring *result, bool allow_incomplete,
                                      bool unescape_special) {
     assert(input[0] == L'\\' && "Not an escape");
@@ -1415,8 +1390,12 @@ static bool unescape_string_internal(const wchar_t *const input, const size_t in
                 }
                 case L'$': {
                     if (unescape_special) {
-                        to_append_or_none = VARIABLE_EXPAND;
-                        vars_or_seps.push_back(input_position);
+                        bool is_cmdsub =
+                            input_position + 1 < input_len && input[input_position + 1] == L'(';
+                        if (!is_cmdsub) {
+                            to_append_or_none = VARIABLE_EXPAND;
+                            vars_or_seps.push_back(input_position);
+                        }
                     }
                     break;
                 }
@@ -1995,3 +1974,4 @@ bool is_console_session() {
     }();
     return console_session;
 }
+
